@@ -2,13 +2,16 @@ package space.orpheus;
 
 import space.orpheus.model.*;
 import java.util.*;
+import java.nio.file.*;
+import java.time.Instant;
+import java.io.IOException;
 import static space.orpheus.model.Subsystem.Kind.*;
 
 /** Deterministic integration tests through public game commands, without a JavaFX runtime. */
 public final class SimulationTest {
     private static int assertions;
     public static void main(String[] args) throws Exception {
-        topology();circuits();pauseAndCollision();repairAndCancellation();emergencies();wholeMission();failureAndRestart();scheduler();
+        topology();circuits();pauseAndCollision();repairAndCancellation();emergencies();wholeMission();failureAndRestart();leaderboard();scheduler();
         System.out.println("PASS "+assertions+" assertions: topology, BFS/DFS circuits, collisions, pause, repair transactions, all emergencies, three-stage Earth return, loss/restart, background clock");
     }
     private static void check(boolean condition,String message) {assertions++;if(!condition)throw new AssertionError(message);}
@@ -38,11 +41,14 @@ public final class SimulationTest {
     private static void repairAndCancellation() {
         try(Simulation sim=new Simulation(7,false)) {
             sim.start();walk(sim,4.5,14.5);int scrap=sim.snapshot().inventory().get(Simulation.Resource.SCRAP);sim.interact();
-            check(sim.snapshot().inventory().get(Simulation.Resource.SCRAP)==scrap+4,"salvage gains materials");sim.interact();check(sim.snapshot().inventory().get(Simulation.Resource.SCRAP)==scrap+4,"crate collected once");
+            check(sim.snapshot().inventory().get(Simulation.Resource.SCRAP)==scrap+4,"salvage gains materials");sim.interact();check(sim.snapshot().inventory().get(Simulation.Resource.SCRAP)==scrap+4,"crate collected once");check(sim.snapshot().score().total()==100,"crate scores once");
             walk(sim,4.5,7.5);sim.interact();sim.tick(1);check(sim.snapshot().repairProgress()>0,"repair timed");int before=sim.snapshot().inventory().get(Simulation.Resource.SCRAP);
-            sim.movement(1,0);sim.tick(.1);sim.movement(0,0);check(sim.snapshot().repairProgress()==0,"movement interrupts repair");check(sim.snapshot().inventory().get(Simulation.Resource.SCRAP)==before,"cancel retains materials");
+            sim.movement(1,0);sim.tick(.1);sim.movement(0,0);check(sim.snapshot().repairProgress()==0,"movement interrupts repair");check(sim.snapshot().score().repairs()==0,"interrupted repair earns nothing");check(sim.snapshot().inventory().get(Simulation.Resource.SCRAP)==before,"cancel retains materials");
             sim.interact();sim.tick(4.1);check(system(sim,OXYGEN).online(),"repair restores subsystem");check(sim.snapshot().inventory().get(Simulation.Resource.SCRAP)==before-2,"repair consumes exact cost");
             check(sim.snapshot().hazards().stream().noneMatch(h->h.system()==OXYGEN),"repair clears corresponding alert");
+            check(sim.snapshot().score().total()==350,"repair earns points");
+            sim.triggerEmergency(Simulation.Emergency.OXYGEN_LEAK);repair(sim,OXYGEN);
+            check(sim.snapshot().score().total()==350,"repeat repair earns nothing");
         }
     }
     private static void emergencies() {
@@ -83,16 +89,37 @@ public final class SimulationTest {
     private static void wholeMission() {
         try(Simulation sim=new Simulation(42,false)) {
             sim.start();check(!sim.jump(),"cannot skip stage");walk(sim,4.5,14.5);sim.interact();repair(sim,OXYGEN);repair(sim,HULL);
-            check(sim.snapshot().jumpReady(),"stage one ready");walk(sim,16.5,2.5);sim.interact();check(sim.snapshot().level()==2,"flight deck advances sector two");
+            check(sim.snapshot().jumpReady(),"stage one ready");walk(sim,16.5,2.5);sim.interact();check(sim.snapshot().level()==2,"flight deck advances sector two");check(sim.snapshot().score().sectors()==1000,"sector earns 1000");
             walk(sim,4.5,14.5);sim.interact();repair(sim,REACTOR);repair(sim,POWER);check(sim.snapshot().jumpReady(),"stage two ready");
             walk(sim,16.5,2.5);sim.interact();check(sim.snapshot().level()==3,"flight deck advances sector three");
             walk(sim,4.5,14.5);sim.interact();repair(sim,HULL);repair(sim,REACTOR);repair(sim,NAVIGATION);
-            check(sim.snapshot().jumpReady(),"Earth vector ready");sim.interact();check(sim.snapshot().phase()==Simulation.Phase.WON,"three-stage mission winnable");
+            check(sim.snapshot().jumpReady(),"Earth vector ready");sim.interact();check(sim.snapshot().phase()==Simulation.Phase.WON,"three-stage mission winnable");check(sim.snapshot().score().total()==7050,"Earth return total");
             double t=sim.snapshot().elapsed();sim.tick(5);check(sim.snapshot().elapsed()==t,"won state stops clock");
         }
     }
     private static void failureAndRestart() {
-        try(Simulation sim=new Simulation(8,false)) {sim.start();sim.tick(400);check(sim.snapshot().phase()==Simulation.Phase.LOST,"unattended damaged ship loses");sim.reset();check(sim.snapshot().level()==1&&sim.snapshot().phase()==Simulation.Phase.READY&&sim.snapshot().health()==100,"restart resets world");}
+        try(Simulation sim=new Simulation(8,false)) {sim.start();sim.tick(400);check(sim.snapshot().phase()==Simulation.Phase.LOST,"unattended damaged ship loses");sim.reset();check(sim.snapshot().level()==1&&sim.snapshot().phase()==Simulation.Phase.READY&&sim.snapshot().health()==100,"restart resets world");check(sim.snapshot().score().total()==0,"restart clears points");}
+    }
+    private static void leaderboard() throws IOException {
+        Path directory=Files.createTempDirectory("orpheus-scores-");
+        Path file=directory.resolve("leaderboard.properties");
+        Leaderboard board=new Leaderboard(file);
+        try {
+            check(board.load().isEmpty(),"missing score file is empty");
+            Instant time=Instant.parse("2026-01-01T00:00:00Z");
+            for(int i=0;i<12;i++)board.save(new Leaderboard.Entry("CREW "+i,i,Simulation.Phase.LOST,10,time));
+            board.save(new Leaderboard.Entry("FAST",11,Simulation.Phase.WON,5,time));
+            board.save(new Leaderboard.Entry("EARLY",11,Simulation.Phase.WON,5,time.minusSeconds(1)));
+            Files.writeString(file,"broken=bad|data\n",StandardOpenOption.APPEND);
+            var scores=new Leaderboard(file).load();
+            check(scores.size()==10,"leaderboard reloads ten valid rows");
+            check(scores.get(0).name().equals("EARLY")&&scores.get(1).name().equals("FAST")
+                &&scores.get(2).name().equals("CREW 11"),"ranking uses score, duration and timestamp");
+            try {
+                new Leaderboard(file.resolve("impossible")).save(scores.getFirst());
+                throw new AssertionError("save must report failure");
+            } catch(IOException expected) { check(board.load().size()==10,"failed save leaves existing results readable"); }
+        } finally { Files.deleteIfExists(file);Files.deleteIfExists(directory); }
     }
     private static void scheduler() throws InterruptedException {
         try(Simulation sim=new Simulation(42,true)) {sim.start();Thread.sleep(320);check(sim.snapshot().elapsed()>=.2,"background simulation ticks");sim.pause();double t=sim.snapshot().elapsed();Thread.sleep(180);check(sim.snapshot().elapsed()==t,"background pause is stable");}

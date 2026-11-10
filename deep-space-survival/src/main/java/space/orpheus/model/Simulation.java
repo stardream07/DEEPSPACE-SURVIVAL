@@ -18,7 +18,10 @@ public final class Simulation implements AutoCloseable {
         double health,double x,double y,boolean moving,int facing,String room,Map<Resource,Integer> inventory,
         List<SystemView> systems,List<HazardView> hazards,List<CrateView> crates,List<LogEntry> log,
         String hint,String objective,boolean jumpReady,double repairProgress,String repairName,
-        int[][] circuit,Set<Integer> energized,boolean circuitConnected,String circuitName,int repairs) {}
+        int[][] circuit,Set<Integer> energized,boolean circuitConnected,String circuitName,int repairs,Score score) {}
+    public record Score(int salvage,int repairs,int sectors,int earth) {
+        public int total() { return salvage+repairs+sectors+earth; }
+    }
     private record Crate(int id,double x,double y) {}
     private static final class Hazard {
         final Emergency type; final Subsystem.Kind system; final String message; final double x,y; double age;
@@ -35,7 +38,8 @@ public final class Simulation implements AutoCloseable {
     private final ScheduledExecutorService scheduler;
     private Environment env;
     private Phase phase;
-    private int level,facing,repairs;
+    private int level,facing,repairs,salvagePoints,repairPoints,sectorPoints,earthPoints;
+    private final EnumSet<Subsystem.Kind> scoredRepairs=EnumSet.noneOf(Subsystem.Kind.class);
     private double elapsed,levelTime,nextEmergency,x,y,health,inputX,inputY,repairTime;
     private Subsystem repairing,circuitSystem;
     private CircuitBoard circuit;
@@ -50,6 +54,7 @@ public final class Simulation implements AutoCloseable {
     public synchronized void reset() {
         env=new Environment(); phase=Phase.READY;level=1;elapsed=0;levelTime=0;nextEmergency=65;x=16.5;y=8.5;health=100;
         inputX=inputY=0;facing=0;repairs=0;repairTime=0;repairing=null;circuit=null;circuitSystem=null;
+        salvagePoints=repairPoints=sectorPoints=earthPoints=0;scoredRepairs.clear();
         hazards.clear();collected.clear();log.clear();systems.clear();inventory.clear();notice="";noticeUntil=0;
         for(Subsystem.Kind k:Subsystem.Kind.values()) systems.put(k,Subsystem.create(k));
         inventory.put(Resource.SCRAP,3);inventory.put(Resource.WIRE,2);inventory.put(Resource.COOLANT,1);inventory.put(Resource.O2,1);
@@ -101,7 +106,7 @@ public final class Simulation implements AutoCloseable {
         if(phase==Phase.READY) { start();return; }
         if(phase!=Phase.RUNNING||circuit!=null||repairing!=null)return;
         for(Crate c:crates) if(!collected.contains(c.id)&&distance(x,y,c.x,c.y)<1.8) {
-            collected.add(c.id);give(Resource.SCRAP,4);give(Resource.WIRE,3);give(Resource.COOLANT,1);give(Resource.O2,1);
+            collected.add(c.id);salvagePoints+=100;give(Resource.SCRAP,4);give(Resource.WIRE,3);give(Resource.COOLANT,1);give(Resource.O2,1);
             addLog("SALVAGE: +4 SCRAP +3 WIRE +1 COOLANT +1 O2",false);message("SUPPLY CRATE SALVAGED");return;
         }
         Subsystem s=nearest();
@@ -147,13 +152,15 @@ public final class Simulation implements AutoCloseable {
     private void completeRepair(Subsystem s) {
         if(!canAfford(s)) { repairing=null;repairTime=0;message("REPAIR ABORTED / INSUFFICIENT MATERIALS");return; }
         s.repairCost().forEach((r,n)->use(r,n));s.restore();hazards.removeIf(h->h.system==s.kind);repairs++;
+        if(scoredRepairs.add(s.kind))repairPoints+=250;
         switch(s.kind) { case OXYGEN->env.oxygen=Math.min(100,env.oxygen+10);case REACTOR->env.temperature=Math.max(42,env.temperature-18);case HULL->env.hull=Math.min(100,env.hull+12);case POWER->env.power=Math.min(100,env.power+25);default->{} }
         repairing=null;repairTime=0;addLog(s.name+" RESTORED / SYSTEM ONLINE",false);message(s.name+" RESTORED");
     }
     private boolean canAfford(Subsystem s) { return s.repairCost().entrySet().stream().allMatch(e->inventory.get(e.getKey())>=e.getValue()); }
     private void advance() {
-        if(level==3) { phase=Phase.WON;inputX=inputY=0;addLog("EARTH SIGNAL ACQUIRED. WELCOME HOME.",false);return; }
-        level++;levelTime=0;nextEmergency=55;collected.clear();give(Resource.O2,1);give(Resource.COOLANT,1);
+        sectorPoints+=1000;
+        if(level==3) { earthPoints=2000;phase=Phase.WON;inputX=inputY=0;addLog("EARTH SIGNAL ACQUIRED. WELCOME HOME.",false);return; }
+        level++;scoredRepairs.clear();levelTime=0;nextEmergency=55;collected.clear();give(Resource.O2,1);give(Resource.COOLANT,1);
         if(level==2) { systems.get(REACTOR).damage(65);systems.get(POWER).damage(65);triggerEmergency(Emergency.REACTOR_OVERHEAT);triggerEmergency(Emergency.POWER_SURGE);addLog("STAGE 02 / CROSS THE DEBRIS FIELD",true); }
         else { systems.get(NAVIGATION).damage(65);triggerEmergency(Emergency.FIRE);triggerEmergency(Emergency.HULL_BREACH);addLog("STAGE 03 / REBUILD THE EARTH VECTOR",true); }
         message("SECTOR TRANSIT COMPLETE / CARGO RESTOCKED");
@@ -196,7 +203,7 @@ public final class Simulation implements AutoCloseable {
             hazards.stream().map(h->new HazardView(h.type,h.system,h.message,h.x,h.y,h.age)).toList(),
             crates.stream().map(c->new CrateView(c.id,c.x,c.y,collected.contains(c.id))).toList(),List.copyOf(log),
             hint(),objective(),jumpReady(),repairTime/4,repairing==null?"":repairing.name,
-            circuit==null?null:circuit.copyPorts(),circuit==null?Set.of():circuit.energized(),circuit!=null&&circuit.connected(),circuitSystem==null?"":circuitSystem.name,repairs);
+            circuit==null?null:circuit.copyPorts(),circuit==null?Set.of():circuit.energized(),circuit!=null&&circuit.connected(),circuitSystem==null?"":circuitSystem.name,repairs,new Score(salvagePoints,repairPoints,sectorPoints,earthPoints));
     }
     @Override public void close() { if(scheduler!=null)scheduler.shutdownNow(); }
 }

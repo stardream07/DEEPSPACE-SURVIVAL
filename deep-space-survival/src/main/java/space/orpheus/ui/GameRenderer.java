@@ -9,6 +9,9 @@ import static space.orpheus.ui.Palette.*;
 import static space.orpheus.model.Subsystem.Kind.*;
 
 public final class GameRenderer {
+    public String crew="",entryNotice="",scoreNotice="";
+    public boolean showScores;
+    public List<space.orpheus.model.Leaderboard.Entry> scores=List.of();
     public static final int WIDTH=640,HEIGHT=400,MX=33,MY=94,TILE=13;
     private final Canvas buffer=new Canvas(WIDTH,HEIGHT);
     private final WritableImage pixels=new WritableImage(WIDTH,HEIGHT);
@@ -27,6 +30,8 @@ public final class GameRenderer {
         if(s.phase()==Simulation.Phase.PAUSED)pauseOverlay();
         if(s.phase()==Simulation.Phase.WON||s.phase()==Simulation.Phase.LOST)ending(s);
         if(help)helpOverlay();
+        if(s.phase()==Simulation.Phase.READY)crewEntry();
+        if(showScores)leaderboard();
         buffer.snapshot(null,pixels);
         GraphicsContext target=canvas.getGraphicsContext2D();target.setImageSmoothing(false);target.setFill(VOID);target.fillRect(0,0,canvas.getWidth(),canvas.getHeight());
         double scale=scale(canvas),ox=(canvas.getWidth()-WIDTH*scale)/2,oy=(canvas.getHeight()-HEIGHT*scale)/2;
@@ -43,7 +48,8 @@ public final class GameRenderer {
     private void header(Simulation.Snapshot s) {
         r(PANEL,12,11,23,24);r(CYAN,17,15,3,13);r(CYAN,27,15,3,13);r(CYAN,20,13,7,3);r(CYAN,20,27,7,3);r(VOID,21,17,5,9);
         title("ORPHEUS",44,11,WHITE);t("DEEP-SPACE SURVIVAL",45,31,MUTED);
-        t("A.S.V. ORPHEUS / CREW: 01",229,13,MUTED);t("RETURN VECTOR: EARTH",229,27,CYAN);
+        t("CREW: "+(s.phase()==Simulation.Phase.READY?"AWAITING":crew),229,13,MUTED);
+        t("SCORE: "+s.score().total(),229,27,CYAN);
         t("SECTOR",408,13,MUTED);title("0"+s.level(),450,10,AMBER);t("/ 03",478,18,MUTED);
         button("pause",s.phase()==Simulation.Phase.PAUSED?"RESUME":"PAUSE",527,12,67,MUTED);button("help","?",603,12,25,CYAN);
         r(STEEL,12,41,616,1);
@@ -158,7 +164,7 @@ public final class GameRenderer {
         for(int i=0;i<Math.min(3,s.hazards().size());i++) {String name=s.hazards().get(i).type().name().replace('_',' ');t(name,491,yy,AMBER);yy+=12;}
         if(s.hazards().size()>3)t("+"+(s.hazards().size()-3)+" ADDITIONAL",491,yy,RED);
         t("SUIT",491,284,MUTED);r(DARK,527,284,58,5);r(s.health()<30?RED:GREEN,527,284,(int)(58*s.health()/100),5);t(String.format(Locale.ROOT,"%02.0f",s.health()),595,283,WHITE);
-        if(s.phase()==Simulation.Phase.READY)button("start","BEGIN WATCH >",490,303,130,AMBER);
+        if(s.phase()==Simulation.Phase.READY) { /* Crew entry supplies the start control. */ }
         else if(s.jumpReady())button("jump",s.level()==3?"RETURN TO EARTH":"JUMP AVAILABLE",490,303,130,GREEN);
         else button("route",route?"HIDE ROUTE [TAB]":"SHOW ROUTE [TAB]",490,303,130,CYAN);
     }
@@ -193,18 +199,50 @@ public final class GameRenderer {
     }
     private void shade() {g.setGlobalAlpha(.86);r(VOID,0,0,WIDTH,HEIGHT);g.setGlobalAlpha(1);}
     private void pauseOverlay() {shade();panel(188,135,264,130);title("WATCH PAUSED",211,153,WHITE);t("ALL SIMULATION SYSTEMS SUSPENDED",211,182,MUTED);button("pause","RESUME [P]",211,204,218,CYAN);button("restart","RESTART MISSION",211,232,218,MUTED);}
+    private void crewEntry() {
+        hits.clear();shade();panel(150,120,340,153);
+        title("CREW IDENTIFICATION",170,138,CYAN);
+        t("A.S.V. ORPHEUS / ENTER CREW NAME",170,163,MUTED);
+        panel(170,177,300,28);
+        t(crew+(crew.length()<16?"_":""),179,187,WHITE);
+        t(entryNotice.isEmpty()?"1-16 CHARACTERS":entryNotice,170,213,entryNotice.isEmpty()?MUTED:RED);
+        button("start","BEGIN WATCH [ENTER]",170,226,168,AMBER);
+        button("scores","LEADERBOARD",348,226,122,CYAN);
+    }
+
+    private void leaderboard() {
+        hits.clear();shade();panel(130,75,380,255);
+        title("LOCAL LEADERBOARD",150,93,CYAN);
+        t("RK  CREW",150,122,MUTED);t("SCORE",299,122,MUTED);
+        t("RESULT",359,122,MUTED);t("TIME",419,122,MUTED);
+        if(scores.isEmpty())t("NO FINISHED WATCHES LOGGED",150,144,MUTED);
+        for(int i=0;i<scores.size();i++) {
+            var row=scores.get(i);int y=143+i*13;
+            t(String.format(Locale.ROOT,"%02d",i+1),150,y,MUTED);t(row.name(),174,y,WHITE);
+            t(Integer.toString(row.score()),299,y,AMBER);t(row.outcome().name(),359,y,row.outcome()==Simulation.Phase.WON?GREEN:RED);
+            t((long)row.seconds()+"S",419,y,MUTED);
+        }
+        t(scoreNotice,150,279,RED);
+        button("score-close","BACK [ESC]",150,296,340,CYAN);
+    }
+
     private void ending(Simulation.Snapshot s) {
-        shade();panel(144,103,352,187);boolean win=s.phase()==Simulation.Phase.WON;
+        hits.clear();shade();panel(144,91,352,233);boolean win=s.phase()==Simulation.Phase.WON;
         title(win?"WELCOME HOME":"SIGNAL LOST",172,125,win?CYAN:RED);
         PixelFont.wrap(g,win?"EARTH RECEIVED YOUR TRANSMISSION. ONE SHIP. ONE SURVIVOR. YOU MADE IT.":"THE ORPHEUS HAS FALLEN SILENT. YOUR SHIP LOG WILL BE REMEMBERED.",172,157,49,MUTED);
         t("SECTORS: "+s.level()+" / 3    REPAIRS: "+s.repairs(),172,198,WHITE);t("WATCH TIME: "+(int)s.elapsed()+" SECONDS",172,215,AMBER);
-        button("restart","BEGIN A NEW WATCH [ENTER]",172,247,296,CYAN);
+        var score=s.score();
+        t(crew+" / FINAL SCORE: "+score.total(),172,232,AMBER);
+        t("SALVAGE "+score.salvage()+" / REPAIR "+score.repairs()+" / SECTOR "+score.sectors(),172,247,WHITE);
+        t("EARTH BONUS "+score.earth(),172,261,WHITE);t(scoreNotice,286,261,RED);
+        button("restart","NEW WATCH [ENTER]",172,285,172,CYAN);
+        button("scores","LEADERBOARD",352,285,116,MUTED);
     }
     private void helpOverlay() {
-        shade();panel(138,77,364,254);title("CREW FIELD MANUAL",158,94,CYAN);
-        String[] lines={"WASD / ARROWS   MOVE THROUGH THE SHIP","E               SALVAGE OR REPAIR","Q               INJECT +25% OXYGEN","F               INJECT COOLANT (-25C)","TAB             TOGGLE ROUTE ASSIST","P / ESC         PAUSE THE SIMULATION","ENTER           START / ENERGIZE CIRCUIT","", "REPAIR COSTS: O2 2 SCRAP + 1 WIRE", "HULL 3 SCRAP / REACTOR 1 SCRAP + 1 CLNT", "BUS 2 WIRE / NAV 1 SCRAP + 1 WIRE", "", "REPAIRS TAKE 4S. MOVING CANCELS THEM.","FIRE HURTS NEARBY CREW. REPAIR ITS PUMP.","RESTORE SYSTEMS, THEN E AT FLIGHT DECK.","ROTATE CIRCUIT TILES TO CONNECT BOTH ENDS."};
+        shade();panel(138,65,364,282);title("CREW FIELD MANUAL",158,94,CYAN);
+        String[] lines={"WASD / ARROWS   MOVE THROUGH THE SHIP","E               SALVAGE OR REPAIR","Q               INJECT +25% OXYGEN","F               INJECT COOLANT (-25C)","TAB             TOGGLE ROUTE ASSIST","P / ESC         PAUSE THE SIMULATION","ENTER           ENERGIZE CIRCUIT","", "REPAIR COSTS: O2 2 SCRAP + 1 WIRE", "HULL 3 SCRAP / REACTOR 1 SCRAP + 1 CLNT", "BUS 2 WIRE / NAV 1 SCRAP + 1 WIRE", "", "REPAIRS TAKE 4S. MOVING CANCELS THEM.","FIRE HURTS NEARBY CREW. REPAIR ITS PUMP.","RESTORE SYSTEMS, THEN E AT FLIGHT DECK.","ROTATE CIRCUIT TILES TO CONNECT BOTH ENDS.","SCORE: CRATE 100 / FIRST REPAIR 250","SECTOR 1000 / EARTH RETURN BONUS 2000"};
         for(int i=0;i<lines.length;i++)t(lines[i],158,122+i*11,i>=8?MUTED:WHITE);
-        button("help","CLOSE MANUAL [H]",158,304,324,CYAN);
+        button("help","CLOSE MANUAL [H]",158,324,324,CYAN);
     }
     public WritableImage pixels() {return pixels;}
 }
