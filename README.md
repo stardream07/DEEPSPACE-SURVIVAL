@@ -1,8 +1,8 @@
 # ORPHEUS — Deep-Space Survival Simulator
 
-A playable Java/JavaFX survival game built from scratch because no existing Java project was supplied. Its visual direction follows the supplied `WhatsApp Image 2026-10-09 at 23.56.47.jpeg`: dark cockpit framing, muted indigo space, small instrument lights, and crisp, deliberately authored pixels.
+A playable Java/JavaFX survival game built from scratch because no existing Java project was supplied. Its visual direction follows the supplied : dark cockpit framing, muted indigo space, small instrument lights, and crisp, deliberately authored pixels.
 
-![Ship view](artifacts/ready.png)
+
 
 ## Run
 
